@@ -16,21 +16,21 @@ void loop ()
 {
 	if (Serial.available())
 	{
-        unsigned char params[1] = {0x00};
-		module.send (0x06, params, 1);
-		Serial.println ("Done.");
-		Serial.read();
-	}
+		int voltage = module.readAdcValue (Serial.read() - '0');
 
-	if (Serial2.available())
-	{
-		int data = Serial2.read();
-		Serial1.write (data);
+		Serial.print ("Voltage: ");
+		Serial.println (voltage);
 	}
 
 	if (Serial1.available())
 	{
-		int data = Serial1.read();
+		char data = Serial1.read();
 		Serial2.write (data);
 	}
-}
+
+	if (Serial2.available())
+	{
+		char data = Serial2.read();
+		Serial1.write (data);
+	}
+} // loop
