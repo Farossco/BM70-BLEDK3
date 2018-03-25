@@ -10,7 +10,6 @@ BM70::BM70(HardwareSerial * serial, int baudrate)
 {
 	this->serial = serial;
 	serial->begin (baudrate);
-	status = 0x00;
 }
 
 /**
@@ -247,7 +246,7 @@ int BM70::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parameters
  *           -1 if failed to receive answer
  *
  **/
-int BM70::readLocalInformation (uint32_t &fwVersion, uint64_t &btAddress, uint16_t timeout)
+int BM70::getInfos (uint32_t &fwVersion, uint64_t &btAddress, uint16_t timeout)
 {
 	uint8_t data[20]; // Response should not exceed 17 bytes
 	uint16_t length;
@@ -270,6 +269,7 @@ int BM70::readLocalInformation (uint32_t &fwVersion, uint64_t &btAddress, uint16
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer
+ *           -2 if wrong status after reset
  *
  **/
 int BM70::reset (uint16_t timeout)
@@ -280,7 +280,8 @@ int BM70::reset (uint16_t timeout)
 	if (sendAndRead (0x02, NULL, 0, data, sizeof(data), length, timeout, 100) != 0)
 		return -1;
 
-	status = data[4];
+	if (data[4] != 0x09)
+		return -2;
 
 	return 0;
 }
@@ -288,13 +289,14 @@ int BM70::reset (uint16_t timeout)
 /**
  * Read and store status if succeeded
  *
+ * Ouput	: status - The current status of the module
  * Input	: timeout (optional) - Timeout for receiving the answer (in ms) - default is 10 ms
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer
  *
  **/
-int BM70::readStatus (uint16_t timeout)
+int BM70::getStatus (uint8_t &status, uint16_t timeout)
 {
 	uint8_t data[9]; // Response should not exceed 6 bytes
 	uint16_t length;
@@ -311,15 +313,16 @@ int BM70::readStatus (uint16_t timeout)
  * Read voltage value from ADC
  *
  * Input	: channel (0x00 -> 0x0F or 0x10 for Battery and 0x11 for temperature)	- Channelto read from
+ * Output	: adcValue																- Voltage value in volt or temperature value in °C
  * Input	: timeout (optional)													- Timeout for receiving the answer (in ms) - default is 10 ms
  *
- * Returns	: Voltage value in volt or temperature value in °C
+ * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
  *
  * TODO : Temperature in °C
  *
  **/
-float BM70::readAdcValue (uint8_t channel, uint16_t timeout)
+int BM70::getAdc (uint8_t channel, float &adcValue, uint16_t timeout)
 {
 	uint8_t data[13], stepSize; // Response should not exceed 10 bytes
 	uint16_t length, value;
@@ -365,6 +368,7 @@ float BM70::readAdcValue (uint8_t channel, uint16_t timeout)
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
+ *			 -2 if wrong status after shutdown
  *
  **/
 int BM70::shutDown (uint16_t timeout)
@@ -382,7 +386,8 @@ int BM70::shutDown (uint16_t timeout)
 	if (error != 0)
 		return error;
 
-	status = data[4];
+	if (data[4] != 0x0A)
+		return -2;
 
 	return 0;
 }
@@ -449,24 +454,6 @@ int BM70::setName (char * name, uint16_t timeout)
 }
 
 /**
- * Erase all paired device from the module memory
- *
- * Returns	: 0 if succeeded
- *           -1 if failed to receive answer or bad answer
- *
- **/
-int BM70::eraseAllPaired (uint16_t timeout)
-{
-	uint8_t data[10]; // Response should not exceed 7 bytes
-	uint16_t length;
-
-	if (sendAndRead (0x09, NULL, 0, data, sizeof(data), length, timeout) != 0)
-		return -1;
-
-	return 0;
-}
-
-/**
  * Get the current pairing mode setting of the device
  *
  * Output : setting - The pairing mode from 0x00 to 0x04 :	0x00 = DisplayOnly
@@ -479,7 +466,7 @@ int BM70::eraseAllPaired (uint16_t timeout)
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70::readPairingModeSetting (uint8_t &setting, uint16_t timeout)
+int BM70::getPairingMode (uint8_t &setting, uint16_t timeout)
 {
 	uint8_t data[10]; // Response should not exceed 7 bytes
 	uint16_t length;
@@ -503,10 +490,10 @@ int BM70::readPairingModeSetting (uint8_t &setting, uint16_t timeout)
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
- * 			 -2 if setting is incorrect
+ *           -2 if setting is incorrect
  *
  **/
-int BM70::writePairingModeSetting (uint8_t setting, uint16_t timeout)
+int BM70::setPairingMode (uint8_t setting, uint16_t timeout)
 {
 	uint8_t data[10], parameters[2]; // Response should not exceed 7 bytes
 	uint16_t length;
@@ -518,6 +505,73 @@ int BM70::writePairingModeSetting (uint8_t setting, uint16_t timeout)
 	parameters[1] = setting;
 
 	if (sendAndRead (0x0B, parameters, 2, data, sizeof(data), length, 10, 50) != 0)
+		return -1;
+
+	return 0;
+}
+
+/**
+ * Read all paired devices addresses and put them in an array
+ *
+ * Output : devices (Array of size 8)		- Paired devices from most recent to oldest (0 is most recent)
+ * Output : priorities (Array of size 8)	- The priority of the device (Priority of device i is priorities[i])
+ * Output : size (Size of the arrays)		- The number of devices that are paired and copied to the array
+ *
+ * Note : "size" is what you should consider as the size of the array, evrything beyond this is
+ *        unpredictable and unwanted datas, the "devices" array should always have a size of 8.
+ *
+ * Returns	: 0 if succeeded
+ *           -1 if failed to receive answer or bad answer
+ *           -2 if bad length
+ *           -3 if bad index positionning
+ *
+ **/
+int BM70::getPaired (uint64_t * devices, uint8_t * priorities, uint8_t &size, uint16_t timeout)
+{
+	uint8_t data[75]; // Response should not exceed 72 bytes
+	uint16_t length;
+
+	if (sendAndRead (0x0C, NULL, 0, data, sizeof(data), length, 10, 50) != 0)
+		return -1;
+
+	if (length % 8 != 0)
+		return -2;
+
+	size = (length - 8) / 8;
+
+	for (int i = 0; i < size; i++)
+	{
+		if (data[7 + 8 * i] != i) // If the index is not the one expected
+			return -3;
+
+		devices[i] = 0;
+
+		for (int j = 0; j < 6; j++)
+		{
+			devices[i] += ((uint64_t) data[9 + 8 * i + j]) << (8 * j);
+		}
+
+		priorities[i] = data[8 + 8 * i];
+	}
+
+	return 0;
+}
+
+/**
+ * Erase given paired device from the module memory
+ *
+ * Input : Index - The index of the device to erase - 0xFF for all
+ *
+ * Returns	: 0 if succeeded
+ *           -1 if failed to receive answer or bad answer
+ *
+ **/
+int BM70::removePaired (uint8_t index, uint16_t timeout)
+{
+	uint8_t data[10]; // Response should not exceed 7 bytes
+	uint16_t length;
+
+	if (sendAndRead (index == 0xFF ? 0x09 : 0x0D, index == 0xFF ? NULL : &index, index == 0xFF ? 0 : 1, data, sizeof(data), length, timeout) != 0)
 		return -1;
 
 	return 0;

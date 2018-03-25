@@ -8,8 +8,6 @@
 class BM70
 {
 public:
-	uint8_t status;
-
 	BM70();
 	BM70(HardwareSerial * serial);
 	BM70(HardwareSerial * serial, int baudrate);
@@ -19,16 +17,17 @@ public:
 	int sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength, uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t timeout = BM70_DEFAULT_TIMEOUT, uint16_t waitDelay = 10, uint16_t maxAttempts = 2);
 
 	// Common commands
-	int readLocalInformation (uint32_t &fwVersion, uint64_t &btAddress, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
+	int getInfos (uint32_t &fwVersion, uint64_t &btAddress, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
 	int reset (uint16_t timeout = BM70_DEFAULT_TIMEOUT);
-	int readStatus (uint16_t timeout = BM70_DEFAULT_TIMEOUT);
-	float readAdcValue (uint8_t channel, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
+	int getStatus (uint8_t &status, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
+	int getAdc (uint8_t channel, float &adcValue, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
 	int shutDown (uint16_t timeout = BM70_DEFAULT_TIMEOUT);
 	int getName (char * name, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
 	int setName (char * name, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
-	int eraseAllPaired (uint16_t timeout = BM70_DEFAULT_TIMEOUT);
-	int readPairingModeSetting (uint8_t &setting, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
-	int writePairingModeSetting (uint8_t setting, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
+	int getPairingMode (uint8_t &setting, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
+	int setPairingMode (uint8_t setting, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
+	int getPaired (uint64_t * devices, uint8_t * priorities, uint8_t &quantity, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
+	int removePaired (uint8_t index, uint16_t timeout = BM70_DEFAULT_TIMEOUT);
 
 private:
 	HardwareSerial * serial;
