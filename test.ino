@@ -93,6 +93,18 @@ void testCommon ()
 
 	delay (4);
 
+	Serial.println ("shutDown test");
+	error = module.shutDown();
+	Serial.print ("Error : ");
+	Serial.println (error);
+	Serial.println();
+
+	delay (1500);
+
+	module.read();
+
+	delay (4);
+
 	Serial.println ("getName test");
 	error = module.getName (name);
 	Serial.print ("Error : ");
@@ -150,10 +162,66 @@ void testCommon ()
 	delay (4);
 
 	Serial.println ("removePaired test");
-	//error = module.removePaired (0xFF);
+	// error = module.removePaired (0xFF);
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.println ("");
 
+	delay (4);
+
+	Serial.println ("enableScan test");
+	error = module.enableScan();
+	Serial.print ("Error : ");
+	Serial.println (error);
+	Serial.println ("");
+
+
+	delay (4);
+
+	Serial.println ("disableScan test");
+	error = module.disableScan();
+	Serial.print ("Error : ");
+	Serial.println (error);
+	Serial.println ("");
+
+
+	delay (4);
+
+	Serial.println ("connect test");
+	error = module.connect (false, 0x001167500000);
+	Serial.print ("Error : ");
+	Serial.println (error);
+	Serial.println ("");
+
+	delay (4);
+
+	Serial.println ("cancelConnect test");
+	error = module.cancelConnect();
+	Serial.print ("Error : ");
+	Serial.println (error);
+	Serial.println ("");
+
+	delay (4);
+
+	Serial.println ("disconnect test");
+	error = module.disconnect();
+	Serial.print ("Error : ");
+	Serial.println (error);
+	Serial.println ("");
+
+	delay (4);
+
+	Serial.println ("enableAdvert test");
+	error = module.enableAdvert();
+	Serial.print ("Error : ");
+	Serial.println (error);
+	Serial.println ("");
+
+	delay (4);
+
+	Serial.println ("disableAdvert test");
+	error = module.disableAdvert();
+	Serial.print ("Error : ");
+	Serial.println (error);
 	Serial.println ("\n");
 } // testCommon
