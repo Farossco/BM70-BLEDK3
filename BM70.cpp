@@ -1,15 +1,128 @@
 #include "BM70.h"
 
-BM70::BM70()
-{ }
-
-BM70::BM70(HardwareSerial * serial) : BM70 (serial, 115200)
-{ }
-
-BM70::BM70(HardwareSerial * serial, int baudrate)
+int BM70_Class::receiveData (uint16_t timeout)
 {
-	this->serial = serial;
-	serial->begin (baudrate);
+	time_t timeoutCounter;
+
+	timeoutCounter = millis();
+
+	while (!Serial1.available())
+	{
+		if (millis() - timeoutCounter >= timeout)
+			return -1;
+	}
+
+	uint8_t data[100]; // TODO : dynamic allocation
+	uint16_t length;
+
+	while (Serial1.available())
+	{
+		if (read (data, sizeof(data), length) == 0)
+		{
+			if (data[3] == 0x80)
+			{
+				addResponse (data[4], data + 5, length - 6);
+			}
+			else if (data[3] == 0x81)
+			{
+				status           = data[4];
+				lastStatusUpdate = millis();
+			}
+		}
+	}
+
+	return 0;
+} // BM70_Class::receiveData
+
+BM70_Class::BM70_Class()
+{ }
+
+void BM70_Class::init (int baudrate)
+{
+	Serial1.begin (baudrate);
+	responseIndex = 0;
+}
+
+uint8_t BM70_Class::getStatus ()
+{
+	return status;
+}
+
+void BM70_Class::setStatus (uint8_t status)
+{
+	this->status = status;
+}
+
+// Test taille buff + remontée
+
+void BM70_Class::addResponse (uint8_t opCode, uint8_t * datas, uint16_t size)
+{
+	while (responseIndex >= BM70_BUFF_SIZE)
+	{
+		responseIndex--;
+
+		for (int i = 0; i < responseIndex; i++)
+		{
+			uint16_t lineSize = ((uint16_t) (responseBuffer[i + 1][1] << 8)) + ((uint16_t) responseBuffer[i + 1][2]) + 3;
+
+			for (int l = 0; l < lineSize; l++)
+				responseBuffer[i][l] = responseBuffer[i + 1][l];
+		}
+	}
+
+	responseBuffer[responseIndex][0] = opCode;
+	responseBuffer[responseIndex][1] = (uint8_t) (size >> 8);
+	responseBuffer[responseIndex][2] = (uint8_t) size;
+
+	for (int i = 0; i < size; i++)
+	{
+		responseBuffer[responseIndex][i + 3] = datas[i];
+	}
+
+	responseIndex++;
+}
+
+int BM70_Class::getResponse (uint8_t opCode, uint8_t * response, uint16_t &size)
+{
+	for (int i = 0; i < responseIndex; i++)
+	{
+		if (responseBuffer[i][0] == opCode)
+		{
+			size = ((uint16_t) (responseBuffer[i][1] << 8)) + ((uint16_t) responseBuffer[i][2]);
+
+			for (int j = 0; j < size; j++)
+				response[j] = responseBuffer[i][j + 3];
+
+			responseIndex--;
+
+			for (int k = i; k < responseIndex; k++)
+			{
+				uint16_t lineSize = ((uint16_t) (responseBuffer[k + 1][1] << 8)) + ((uint16_t) responseBuffer[k + 1][2]) + 3;
+
+				for (int l = 0; l < lineSize; l++)
+					responseBuffer[k][l] = responseBuffer[k + 1][l];
+			}
+
+			responseBuffer[responseIndex][0] = 0x00;
+
+			return 0;
+		}
+	}
+
+	size = 0;
+
+	return -1;
+}
+
+int BM70_Class::responseAvailable (uint8_t opCode)
+{
+	int n = 0;
+
+	for (int i = 0; i < responseIndex; i++)
+		if (responseBuffer[i][0] == opCode)
+			n++;
+
+	return n;
 }
 
 /**
@@ -23,14 +136,14 @@ BM70::BM70(HardwareSerial * serial, int baudrate)
  * Returns	: Nothing
  *
  **/
-void BM70::send (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength)
+void BM70_Class::send (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength)
 {
 	uint16_t flag    = 2;
 	uint8_t lengthH  = (uint8_t) ((1 + parametersLength) >> 8);
 	uint8_t lengthL  = (uint8_t) (1 + parametersLength);
 	uint8_t checksum = 0 - lengthH - lengthL - opCode;
 
-	HardwareSerial * serial0 = serial;
+	HardwareSerial * serial0 = &Serial1;
 
 	for (int i = 0; i < parametersLength; i++)
 		checksum -= parameters[i];
@@ -66,9 +179,9 @@ void BM70::send (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength
  *           -3 if reception timed out
  *
  **/
-int BM70::read (uint16_t timeout)
+int BM70_Class::read ()
 {
-	uint8_t data[100];
+	uint8_t data[5];
 	uint16_t length;
 
 	return read (data, sizeof(data), length);
@@ -90,7 +203,7 @@ int BM70::read (uint16_t timeout)
  *           -6 if provided buffer is too small
  *
  **/
-int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t timeout)
+int BM70_Class::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t timeout)
 {
 	uint8_t checksum;
 	time_t timeoutCounter;
@@ -101,9 +214,9 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 
 	do
 	{
-		if (serial->available())
+		if (Serial1.available())
 		{
-			data[0] = serial->read();
+			data[0] = Serial1.read();
 			Serial.print (data[0], HEX);
 			Serial.print (" ");
 		}
@@ -117,22 +230,21 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 
 	Serial.println();
 
-	data[1] = serial->read();
-	data[2] = serial->read();
+	data[1] = Serial1.read();
+	data[2] = Serial1.read();
 
 	length = (((short) data[1]) << 8 ) + data[2] + 4;
-
 
 	if (length > bufferSize)
 	{
 		Serial.print ("[DEBUG] data emptying : ");
 
 		// Emptying the UART buffer
-		for (int i = 3; serial->available() && i < length; i++)
+		for (int i = 3; Serial1.available() && i < length; i++)
 		{
-			Serial.print (serial->read(), HEX);
+			Serial.print (Serial1.read(), HEX);
 			Serial.print (" ");
-			serial->read();
+			Serial1.read();
 			delay (2);
 		}
 
@@ -142,9 +254,9 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 
 	Serial.print ("[DEBUG] data reading : ");
 
-	for (int i = 3; serial->available() && i < length; i++)
+	for (int i = 3; Serial1.available() && i < length; i++)
 	{
-		data[i] = serial->read();
+		data[i] = Serial1.read();
 		Serial.print (data[i], HEX);
 		Serial.print (" ");
 		delay (2);
@@ -165,7 +277,7 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 	Serial2.write (data, length);
 
 	return 0;
-} // BM70::read
+} // BM70_Class::read
 
 /**
  * Send data and wait for an answer
@@ -173,9 +285,8 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
  * Input	: opCode					- The OP Code to send
  * Input	: parameters (char array)	- The parameters to send
  * Input	: parametersLength			- The length of the parameters array
- * Output	: data						- The received data
- * Input	: bufferSize				- The size of the data buffer provided
- * Output	: length					- The length of the datas
+ * Output	: response					- The received response parameters without the command complete event and without checksum
+ * Output	: length					- The length of the response
  * Input	: timeout					- Timeout before giving up (in ms) - default is 10 ms
  *
  *
@@ -187,56 +298,33 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
  *           -5 if not the answer to the specified request
  *           -6 if provided buffer is too small
  *
- * Warning : execution can last up to 200 ms if no answer is received
- *
  **/
-int BM70::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength, uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t timeout, uint16_t waitDelay, uint16_t maxAttempts)
+int BM70_Class::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength, uint8_t * response, uint16_t &length, uint16_t timeout)
 {
-	int16_t errorCode;
-	uint16_t attempt;
+	uint32_t timeoutCounter;
 
-	errorCode = attempt = 0;
+	send (opCode, parameters, parametersLength);
 
-	do
+	timeoutCounter = millis();
+
+	Serial.print ("Available ressources: ");
+	Serial.println (responseAvailable (opCode));
+
+	while (!responseAvailable (opCode))
 	{
-		attempt++;
+		receiveData();
 
-		if (attempt > maxAttempts)
-			return errorCode;
-
-		send (opCode, parameters, parametersLength);
-
-		errorCode = read (data, bufferSize, length, timeout);
-
-		if (errorCode == 0)
-		{
-			if (data[3] != 0x80 && data[3] != 0x81)
-			{
-				errorCode = -4;
-			}
-			else if (data[3] == 0x80)
-			{
-				if (data[4] != opCode)
-				{
-					errorCode = -5;
-				}
-				else
-				{
-					errorCode = data[5];
-				}
-			}
-		}
-
-		Serial.print ("Attempt ");
-		Serial.print (attempt);
-		Serial.print ("  -  Erreur ");
-		Serial.println (errorCode);
+		if (millis() - timeoutCounter >= 300)
+			return -3;
 	}
-	while (errorCode != 0)
-	;
+
+	if (response[1] != 0x00)
+		return response[1];
+
+	getResponse (opCode, response, length);
 
 	return 0;
-} // BM70::sendAndRead
+}
 
 // ******************************************************************************************** //
 // ************************************** Common commands ************************************* //
@@ -245,7 +333,6 @@ int BM70::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parameters
 /**
  * Read Local informations from BM70 module
  *
- * Input	: timeout (optional)	- Timeout for receiving the answer (in ms) - default is 10 ms
  * Output	: fwVersion				- The Firmware version of the module
  * Output	: btAddress				- The Bluetooth address of the module
  *
@@ -253,65 +340,46 @@ int BM70::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parameters
  *           -1 if failed to receive answer
  *
  **/
-int BM70::getInfos (uint32_t &fwVersion, uint64_t &btAddress)
+int BM70_Class::getInfos (uint32_t &fwVersion, uint64_t &btAddress)
 {
-	uint8_t data[20]; // Response should not exceed 17 bytes
+	uint8_t response[13]; // Response parameters should not exceed 10 bytes
 	uint16_t length;
 
 	fwVersion = btAddress = 0;
 
-	if (sendAndRead (0x01, NULL, 0, data, sizeof(data), length) != 0)
-		return -1;
+	int error = sendAndRead (0x01, NULL, 0, response, length);
 
-	fwVersion = (((uint32_t) data[6]) << 24) + (((uint32_t) data[7]) << 16) + (((uint32_t) data[8]) << 8) + data[9];
-	btAddress = (((uint64_t) data[15]) << 40) + ( ((uint64_t) data[14]) << 32) + (((uint64_t) data[13]) << 24) + (((uint64_t) data[12]) << 16) + (((uint64_t) data[11]) << 8) + data[10];
+	if (error != 0)
+		return error;
 
-	return 0;
-}
-
-/**
- * Reset module and store status if succeeded
- *
- * Input	: timeout (optional) - Timeout for receiving the answer (in ms) - default is 10 ms
- *
- * Returns	: 0 if succeeded
- *           -1 if failed to receive answer
- *           -2 if wrong status after reset
- *
- **/
-int BM70::reset ()
-{
-	uint8_t data[9]; // Response should not exceed 6 bytes
-	uint16_t length;
-
-	if (sendAndRead (0x02, NULL, 0, data, sizeof(data), length, 100) != 0)
-		return -1;
-
-	if (data[4] != 0x09)
-		return -2;
+	fwVersion = (((uint32_t) response[1]) << 24) + (((uint32_t) response[2]) << 16) + (((uint32_t) response[3]) << 8) + response[4];
+	btAddress = (((uint64_t) response[10]) << 40) + ( ((uint64_t) response[9]) << 32) + (((uint64_t) response[8]) << 24) + (((uint64_t) response[7]) << 16) + (((uint64_t) response[6]) << 8) + response[5];
 
 	return 0;
 }
 
 /**
- * Read and store status if succeeded
- *
- * Ouput	: status - The current status of the module
- * Input	: timeout (optional) - Timeout for receiving the answer (in ms) - default is 10 ms
- *
- * Returns	: 0 if succeeded
- *           -1 if failed to receive answer
+ * Reset module
  *
  **/
-int BM70::getStatus (uint8_t &status)
+int BM70_Class::reset ()
 {
-	uint8_t data[9]; // Response should not exceed 6 bytes
-	uint16_t length;
+	send (0x02, NULL, 0);
 
-	if (sendAndRead (0x03, NULL, 0, data, sizeof(data), length) != 0)
-		return -1;
+	receiveData (500);
 
-	status = data[4];
+	return 0;
+}
+
+/**
+ * Ask module fot status update
+ *
+ **/
+int BM70_Class::updateStatus ()
+{
+	send (0x03, NULL, 0);
+
+	receiveData (100);
 
 	return 0;
 }
@@ -321,7 +389,6 @@ int BM70::getStatus (uint8_t &status)
  *
  * Input	: channel (0x00 -> 0x0F or 0x10 for Battery and 0x11 for temperature)	- Channelto read from
  * Output	: adcValue																- Voltage value in volt or temperature value in °C
- * Input	: timeout (optional)													- Timeout for receiving the answer (in ms) - default is 10 ms
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
@@ -329,19 +396,19 @@ int BM70::getStatus (uint8_t &status)
  * TODO : Temperature in °C
  *
  **/
-int BM70::getAdc (uint8_t channel, float &adcValue)
+int BM70_Class::getAdc (uint8_t channel, float &adcValue)
 {
-	uint8_t data[13], stepSize; // Response should not exceed 10 bytes
+	uint8_t response[7], stepSize; // Response parameters should not exceed 4 bytes
 	uint16_t length, value;
 	float stepVolt;
 
 	value = stepSize = 0;
 
-	if (sendAndRead (0x04, &channel, 1, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x04, &channel, 1, response, length) != 0)
 		return -1;
 
-	stepSize = data[6];
-	value    = (((uint16_t) data[7]) << 8) + data[8];
+	stepSize = response[1];
+	value    = (((uint16_t) response[2]) << 8) + response[3];
 
 	// stepVolt = 0.1 / (pow (2, stepSize - 1));
 
@@ -367,36 +434,22 @@ int BM70::getAdc (uint8_t channel, float &adcValue)
 			return -1;
 	}
 
-	return stepVolt * value;
-} // BM70::readAdcValue
+	adcValue = stepVolt * value;
+
+	return 0;
+} // BM70_Class::readAdcValue
 
 /**
- * Put the module in shutdown mode
- *
- * Input	: timeout (optional) - Timeout for receiving the answer (in ms) - default is 10 ms
- *
- * Returns	: 0 if succeeded
- *           -1 if failed to receive answer or bad answer
- *			 -2 if wrong status after shutdown
+ * Puts the module into shutdown mode
  *
  **/
-int BM70::shutDown ()
+int BM70_Class::shutDown ()
 {
-	uint8_t data[10]; // Response should not exceed 7 bytes
+	uint8_t response[4]; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
-	if (sendAndRead (0x05, NULL, 0, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x05, NULL, 0, response, length) != 0)
 		return -1;
-
-	delay (100);
-
-	int error = read (data, sizeof(data), length, 500);
-
-	if (error != 0)
-		return error;
-
-	if (data[4] != 0x0A)
-		return -2;
 
 	return 0;
 }
@@ -405,26 +458,25 @@ int BM70::shutDown ()
  * Read the device name and copy it in a char array with a '\0' as end character
  *
  * Output	: name (char array)  - The name of the device
- * Input	: timeout (optional) - Timeout for receiving the answer (in ms) - default is 10 ms
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70::getName (char * name)
+int BM70_Class::getName (char * name)
 {
-	uint8_t data[42]; // Response should not exceed 39 bytes
+	uint8_t response[36]; // Response parameters should not exceed 33 bytes
 	uint16_t length;
 
-	if (sendAndRead (0x07, NULL, 0, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x07, NULL, 0, response, length) != 0)
 		return -1;
 
-	for (int i = 6; i < length - 1; i++)
+	for (int i = 1; i < length - 1; i++)
 	{
-		name[i - 6] = data[i];
+		name[i - 1] = response[i];
 	}
 
-	name [length - 7] = '\0';
+	name [length - 1] = '\0';
 
 	return 0;
 }
@@ -433,7 +485,6 @@ int BM70::getName (char * name)
  * Write the device name with the one given
  *
  * Input	: name (char array)		- The name of the device (16 char max - Ending with '\0' !)
- * Input	: timeout (optional)	- Timeout for receiving the answer (in ms) - default is 10 ms
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
@@ -441,9 +492,9 @@ int BM70::getName (char * name)
  *           -3 if name too long
  *
  **/
-int BM70::setName (char * name)
+int BM70_Class::setName (char * name)
 {
-	uint8_t data[10], parameters[16]; // Response should not exceed 7 bytes
+	uint8_t response[4], parameters[16]; // Response parameters should not exceed 1 bytes
 	uint16_t length, parametersLength;
 
 	parametersLength = strlen (name);
@@ -458,7 +509,7 @@ int BM70::setName (char * name)
 	for (int i = 0; i < parametersLength; i++)
 		parameters[i + 1] = name[i];
 
-	if (sendAndRead (0x08, parameters, parametersLength + 1, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x08, parameters, parametersLength + 1, response, length) != 0)
 		return -1;
 
 	return 0;
@@ -467,26 +518,25 @@ int BM70::setName (char * name)
 /**
  * Get the current pairing mode setting of the device
  *
- * Output	: setting				- The pairing mode from 0x00 to 0x04 :	0x00 = DisplayOnly
- *																			0x01 = DisplayYesNo
- *																			0x02 = KeyboardOnly
- *																			0x03 = NoInputNoOutput
- *																			0x04 = KeyboardDisplay
- * Input	: timeout (optional)	- Timeout for receiving the answer (in ms) - default is 10 ms
+ * Output	: setting - The pairing mode from 0x00 to 0x04 :	0x00 = DisplayOnly
+ *																0x01 = DisplayYesNo
+ *																0x02 = KeyboardOnly
+ *																0x03 = NoInputNoOutput
+ *																0x04 = KeyboardDisplay
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70::getPairingMode (uint8_t &setting)
+int BM70_Class::getPairingMode (uint8_t &setting)
 {
-	uint8_t data[10]; // Response should not exceed 7 bytes
+	uint8_t response[5]; // Response parameters should not exceed 2 bytes
 	uint16_t length;
 
-	if (sendAndRead (0x0A, NULL, 0, data, sizeof(data), length, 10, 50) != 0)
+	if (sendAndRead (0x0A, NULL, 0, response, length) != 0)
 		return -1;
 
-	setting = data[6];
+	setting = response[1];
 
 	return 0;
 }
@@ -494,21 +544,20 @@ int BM70::getPairingMode (uint8_t &setting)
 /**
  * Set the given pairing mode setting to the device
  *
- * Input	: setting				- The pairing mode from 0x00 to 0x04 :	0x00 = DisplayOnly
- *																			0x01 = DisplayYesNo
- *																			0x02 = KeyboardOnly
- *																			0x03 = NoInputNoOutput
- *																			0x04 = KeyboardDisplay
- * Input	: timeout (optional)	- Timeout for receiving the answer (in ms) - default is 10 ms
+ * Input	: setting - The pairing mode from 0x00 to 0x04 :	0x00 = DisplayOnly
+ *																0x01 = DisplayYesNo
+ *																0x02 = KeyboardOnly
+ *																0x03 = NoInputNoOutput
+ *																0x04 = KeyboardDisplay
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
  *           -2 if setting is incorrect
  *
  **/
-int BM70::setPairingMode (uint8_t setting)
+int BM70_Class::setPairingMode (uint8_t setting)
 {
-	uint8_t data[10], parameters[2]; // Response should not exceed 7 bytes
+	uint8_t response[4], parameters[2]; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	if (setting > 0x04)
@@ -517,7 +566,7 @@ int BM70::setPairingMode (uint8_t setting)
 	parameters[0] = 0x00;
 	parameters[1] = setting;
 
-	if (sendAndRead (0x0B, parameters, 2, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x0B, parameters, 2, response, length) != 0)
 		return -1;
 
 	return 0;
@@ -529,7 +578,6 @@ int BM70::setPairingMode (uint8_t setting)
  * Output	: devices (Array of size 8)		- Paired devices from most recent to oldest (0 is most recent)
  * Output	: priorities (Array of size 8)	- The priority of the device (Priority of device i is priorities[i])
  * Output	: size (Size of the arrays)		- The number of devices that are paired and copied to the array
- * Input	: timeout (optional)			- Timeout for receiving the answer (in ms) - default is 10 ms
  *
  * Note		: "size" is what you should consider as the size of the array, evrything beyond this is
  *			  unpredictable and unwanted datas, the "devices" array should always have a size of 8.
@@ -538,34 +586,38 @@ int BM70::setPairingMode (uint8_t setting)
  *           -1 if failed to receive answer or bad answer
  *           -2 if bad length
  *           -3 if bad index positionning
+ *           -4 if bad number of paired devices
  *
  **/
-int BM70::getPaired (uint64_t * devices, uint8_t * priorities, uint8_t &size)
+int BM70_Class::getPaired (uint64_t * devices, uint8_t * priorities, uint8_t &size)
 {
-	uint8_t data[75]; // Response should not exceed 72 bytes
+	uint8_t response[69]; // Response parameters should not exceed 66 bytes
 	uint16_t length;
 
-	if (sendAndRead (0x0C, NULL, 0, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x0C, NULL, 0, response, length) != 0)
 		return -1;
 
-	if (length % 8 != 0)
+	if ((length - 2) % 8 != 0)
 		return -2;
 
-	size = (length - 8) / 8;
+	size = (length - 2) / 8;
+
+	if (size != response[1])
+		return -4;
 
 	for (int i = 0; i < size; i++)
 	{
-		if (data[7 + 8 * i] != i) // If the index is not the one expected
+		if (response[2 + 8 * i] != i) // If the index is not the one expected
 			return -3;
 
 		devices[i] = 0;
 
+		priorities[i] = response[3 + 8 * i];
+
 		for (int j = 0; j < 6; j++)
 		{
-			devices[i] += ((uint64_t) data[9 + 8 * i + j]) << (8 * j);
+			devices[i] += ((uint64_t) response[4 + 8 * i + j]) << (8 * j);
 		}
-
-		priorities[i] = data[8 + 8 * i];
 	}
 
 	return 0;
@@ -574,19 +626,18 @@ int BM70::getPaired (uint64_t * devices, uint8_t * priorities, uint8_t &size)
 /**
  * Erase given paired device from the module memory
  *
- * Input	: Index					- The index of the device to erase - 0xFF for all
- * Input	: timeout (optional)	- Timeout for receiving the answer (in ms) - default is 10 ms
+ * Input	: Index - The index of the device to erase - 0xFF for all
  *
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70::removePaired (uint8_t index)
+int BM70_Class::removePaired (uint8_t index)
 {
-	uint8_t data[10]; // Response should not exceed 7 bytes
+	uint8_t response[4]; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
-	if (sendAndRead (index == 0xFF ? 0x09 : 0x0D, index == 0xFF ? NULL : &index, index == 0xFF ? 0 : 1, data, sizeof(data), length) != 0)
+	if (sendAndRead (index == 0xFF ? 0x09 : 0x0D, index == 0xFF ? NULL : &index, index == 0xFF ? 0 : 1, response, length) != 0)
 		return -1;
 
 	return 0;
@@ -607,24 +658,16 @@ int BM70::removePaired (uint8_t index)
  *           -2 if not in the right status after the command
  *
  **/
-int BM70::enableScan (boolean showDuplicate)
+int BM70_Class::enableScan (boolean showDuplicate)
 {
-	uint8_t data[10], arguments[2]; // Response should not exceed 7 bytes
+	uint8_t response[4], arguments[2]; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	arguments[0] = 0x01;
 	arguments[1] = (uint8_t) !showDuplicate;
 
-	if (sendAndRead (0x16, arguments, 2, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x16, arguments, 2, response, length) != 0)
 		return -1;
-
-	if (data[4] != 0x01)
-		return -2;
-
-	int error = read (data, sizeof(data), length, 200);
-
-	if (error != 0)
-		return error;
 
 	return 0;
 }
@@ -637,106 +680,116 @@ int BM70::enableScan (boolean showDuplicate)
  *           -2 if not in the right status after the command
  *
  **/
-int BM70::disableScan ()
+int BM70_Class::disableScan ()
 {
-	uint8_t data[10], arguments[2]; // Response should not exceed 7 bytes
+	uint8_t response[4], arguments[2]; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	arguments[0] = 0x00;
 	arguments[1] = 0x00;
 
-	if (sendAndRead (0x16, arguments, 2, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x16, arguments, 2, response, length) != 0)
 		return -1;
-
-	if (data[4] != 0x09)
-		return -2;
-
-	int error = read (data, sizeof(data), length, 200);
-
-	if (error != 0)
-		return error;
 
 	return 0;
 }
 
-int BM70::connect (boolean randomAddress, uint64_t address)
+/**
+ * Connect to the specified device
+ *
+ **/
+int BM70_Class::connect (boolean randomAddress, uint64_t address)
 {
-	uint8_t data[10], arguments[8]; // Response should not exceed 7 bytes
-	uint16_t length;
+	uint8_t arguments[8];
 
 	arguments[0] = 0x00;
 	arguments[1] = (uint8_t) randomAddress;
 
 	for (int i = 0; i < 6; i++)
-	{
 		arguments[2 + i] = (uint8_t) (address >> (8 * i));
-	}
 
-	if (sendAndRead (0x17, arguments, 8, data, sizeof(data), length) != 0)
-		return -1;
+	send (0x17, arguments, 8);
 
-	if (data[4] != 0x02)
-		return -2;
+	receiveData (500);
 
 	return 0;
 }
 
-int BM70::cancelConnect ()
+/**
+ * Cancel connection attempting
+ *
+ * Returns	: 0 if succeeded
+ *           -1 if failed to receive answer or bad answer
+ **/
+int BM70_Class::cancelConnect ()
 {
-	uint8_t data[10]; // Response should not exceed 7 bytes
+	uint8_t response[4]; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
-	if (sendAndRead (0x18, NULL, 0, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x18, NULL, 0, response, length) != 0)
 		return -1;
 
 	return 0;
 }
 
-int BM70::disconnect ()
+/**
+ * Disconnect Bluetooth
+ *
+ * Returns	: 0 if succeeded
+ *           -1 if failed to receive answer or bad answer
+ *
+ **/
+int BM70_Class::disconnect ()
 {
-	uint8_t data[10], argument; // Response should not exceed 7 bytes
+	uint8_t response[4], argument; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	argument = 0x00;
 
-	if (sendAndRead (0x1B, &argument, 1, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x1B, &argument, 1, response, length) != 0)
 		return -1;
 
 	return 0;
 }
 
-int BM70::enableAdvert ()
+/**
+ * Enable Bluetooth advertising (Goes into standby mode)
+ *
+ * Returns	: 0 if succeeded
+ *           -1 if failed to receive answer or bad answer
+ *
+ **/
+int BM70_Class::enableAdvert ()
 {
-	uint8_t data[10], argument; // Response should not exceed 7 bytes
+	uint8_t response[4], argument; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	argument = 0x01;
 
-	if (sendAndRead (0x1C, &argument, 1, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x1C, &argument, 1, response, length) != 0)
 		return -1;
-
-	read (data, sizeof(data), length, 200);
-
-	if (data[4] != 0x03)
-		return -2;
 
 	return 0;
 }
 
-int BM70::disableAdvert ()
+/**
+ * Disable Bluetooth advertising (Leaves standby mode)
+ *
+ * Returns	: 0 if succeeded
+ *           -1 if failed to receive answer or bad answer
+ *
+ **/
+int BM70_Class::disableAdvert ()
 {
-	uint8_t data[10], argument; // Response should not exceed 7 bytes
+	uint8_t response[4], argument; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	argument = 0x00;
 
-	if (sendAndRead (0x1C, &argument, 1, data, sizeof(data), length) != 0)
+	if (sendAndRead (0x1C, &argument, 1, response, length) != 0)
 		return -1;
-
-	read (data, sizeof(data), length, 200);
-
-	if (data[4] != 0x09)
-		return -2;
 
 	return 0;
 }
+
+BM70_Class BM70 = BM70_Class();
