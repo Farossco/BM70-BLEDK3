@@ -3,16 +3,19 @@
 
 #include <Arduino.h>
 
-#define BM70_DEFAULT_TIMEOUT   100
-#define BM70_BUFF_SIZE         5
-#define BM70_RESPONSE_MAX_SIZE 50
+#define BM70_DEFAULT_TIMEOUT    20
+#define BM70_BUFF_SIZE          5
+#define BM70_RESPONSE_MAX_SIZE  50
+#define BM70_BUFFER_EMPTY_DELAY 1000
 
-class BM70_Class
+class BM70
 {
 public:
-	BM70_Class();
+	BM70();
+	BM70(HardwareSerial & initSerial);
+	BM70(HardwareSerial & initSerial, int baudrate);
 
-	void init (int baudrate);
+	void action ();
 
 	int receiveData (uint16_t timeout = 0);
 
@@ -51,12 +54,13 @@ public:
 	int disableAdvert ();
 
 private:
+	HardwareSerial * serial;
+
 	uint8_t status;
 	time_t lastStatusUpdate;
 	uint8_t responseBuffer[BM70_BUFF_SIZE][BM70_RESPONSE_MAX_SIZE];
 	uint8_t responseIndex;
+	time_t lastBufferAccess;
 };
-
-extern BM70_Class BM70;
 
 #endif // ifndef BM70_H

@@ -1,18 +1,20 @@
 #include <Arduino.h>
 #include "BM70.h"
 
+BM70 module;
+
 void setup ()
 {
 	Serial.begin (250000);
 	Serial1.begin (115200);
 	Serial2.begin (115200);
 
-	BM70.init (115200);
+	module = BM70(Serial1);
 }
 
 void loop ()
 {
-	BM70.receiveData();
+	module.action();
 
 	/*
 	 * if (Serial1.available())
@@ -20,13 +22,13 @@ void loop ()
 	 *  char data = Serial1.read();
 	 *  Serial2.write (data);
 	 * }
-	 *
-	 * if (Serial2.available())
-	 * {
-	 *  char data = Serial2.read();
-	 *  Serial1.write (data);
-	 * }
 	 */
+
+	if (Serial2.available())
+	{
+		char data = Serial2.read();
+		Serial1.write (data);
+	}
 } // loop
 
 void testCommon ()
@@ -46,7 +48,7 @@ void testCommon ()
 
 
 	Serial.println ("getInfos test");
-	error = BM70.getInfos (fwVersion, btAddress);
+	error = module.getInfos (fwVersion, btAddress);
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.print ("fwVersion = 0x");
@@ -59,25 +61,27 @@ void testCommon ()
 	delay (4);
 
 	Serial.println ("reset test");
-	error = BM70.reset();
+	error = module.reset();
 	Serial.print ("Error : ");
 	Serial.println (error);
+	Serial.print ("Satus = 0x");
+	Serial.println (module.getStatus(), HEX);
 	Serial.println();
 
 	delay (4);
 
-	Serial.println ("getStatus test");
-	error = BM70.updateStatus();
+	Serial.println ("updateStatus test");
+	error = module.updateStatus();
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.print ("Satus = 0x");
-	Serial.println (BM70.getStatus(), HEX);
+	Serial.println (module.getStatus(), HEX);
 	Serial.println();
 
 	delay (4);
 
 	Serial.println ("getAdc test");
-	error = BM70.getAdc (0x01, adcValue);
+	error = module.getAdc (0x01, adcValue);
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.print ("ADC value : ");
@@ -87,19 +91,25 @@ void testCommon ()
 	delay (4);
 
 	Serial.println ("shutDown test");
-	error = BM70.shutDown();
+	error = module.shutDown();
 	Serial.print ("Error : ");
 	Serial.println (error);
+	Serial.print ("Satus = 0x");
+	Serial.println (module.getStatus(), HEX);
 	Serial.println();
 
-	delay (1500);
+	while (module.getStatus() != 0x09)
+		module.receiveData();
 
-	BM70.read();
+	Serial.print ("Satus = 0x");
+	Serial.println (module.getStatus(), HEX);
+	Serial.println();
+
 
 	delay (4);
 
 	Serial.println ("getName test");
-	error = BM70.getName (name);
+	error = module.getName (name);
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.print ("Name : ");
@@ -109,7 +119,7 @@ void testCommon ()
 	delay (4);
 
 	Serial.println ("setName test");
-	error = BM70.setName (newName);
+	error = module.setName (newName);
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.println ("");
@@ -117,17 +127,17 @@ void testCommon ()
 	delay (4);
 
 	Serial.println ("getPairingMode test");
-	error = BM70.getPairingMode (setting);
+	error = module.getPairingMode (setting);
 	Serial.print ("Error : ");
 	Serial.println (error);
-	Serial.print ("Setting : ");
+	Serial.print ("Pairing mode : 0x");
 	Serial.println (setting, HEX);
 	Serial.println ("");
 
 	delay (4);
 
 	Serial.println ("setPairingMode test");
-	error = BM70.setPairingMode (0x02);
+	error = module.setPairingMode (0x02);
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.println ("");
@@ -135,7 +145,7 @@ void testCommon ()
 	delay (4);
 
 	Serial.println ("getPaired test");
-	error = BM70.getPaired (devices, priorities, size);
+	error = module.getPaired (devices, priorities, size);
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.print ("Size: ");
@@ -155,49 +165,58 @@ void testCommon ()
 	delay (4);
 
 	Serial.println ("removePaired test");
-	// error = BM70.removePaired (0xFF);
+	// error = module.removePaired (0xFF);
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.println ("");
+} // testCommon
 
-	delay (4);
+void testGap ()
+{
+	int error;
 
 	Serial.println ("enableScan test");
-	error = BM70.enableScan();
+	error = module.enableScan();
 	Serial.print ("Error : ");
 	Serial.println (error);
-	Serial.println ("");
-
+	Serial.print ("Satus = 0x");
+	Serial.println (module.getStatus(), HEX);
+	Serial.println();
 
 	delay (4);
 
 	Serial.println ("disableScan test");
-	error = BM70.disableScan();
+	error = module.disableScan();
 	Serial.print ("Error : ");
 	Serial.println (error);
-	Serial.println ("");
-
+	Serial.print ("Satus = 0x");
+	Serial.println (module.getStatus(), HEX);
+	Serial.println();
 
 	delay (4);
 
 	Serial.println ("connect test");
-	error = BM70.connect (false, 0x001167500000);
+	error = module.connect (false, 0x001167500000);
 	Serial.print ("Error : ");
 	Serial.println (error);
-	Serial.println ("");
+	Serial.print ("Satus = 0x");
+	Serial.println (module.getStatus(), HEX);
+	Serial.println();
 
 	delay (4);
 
 	Serial.println ("cancelConnect test");
-	error = BM70.cancelConnect();
+	error = module.cancelConnect();
 	Serial.print ("Error : ");
 	Serial.println (error);
-	Serial.println ("");
+	Serial.print ("Satus = 0x");
+	Serial.println (module.getStatus(), HEX);
+	Serial.println();
 
 	delay (4);
 
 	Serial.println ("disconnect test");
-	error = BM70.disconnect();
+	error = module.disconnect();
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.println ("");
@@ -205,7 +224,17 @@ void testCommon ()
 	delay (4);
 
 	Serial.println ("enableAdvert test");
-	error = BM70.enableAdvert();
+	error = module.enableAdvert();
+	Serial.print ("Error : ");
+	Serial.println (error);
+	Serial.print ("Satus = 0x");
+	Serial.println (module.getStatus(), HEX);
+	Serial.println();
+
+	delay (4);
+
+	Serial.println ("disconnect test"); 
+	error = module.disconnect();
 	Serial.print ("Error : ");
 	Serial.println (error);
 	Serial.println ("");
@@ -213,11 +242,13 @@ void testCommon ()
 	delay (4);
 
 	Serial.println ("disableAdvert test");
-	error = BM70.disableAdvert();
+	error = module.disableAdvert();
 	Serial.print ("Error : ");
 	Serial.println (error);
+	Serial.print ("Satus = 0x");
+	Serial.println (module.getStatus(), HEX);
 	Serial.println ("\n");
-} // testCommon
+} // testGap
 
 void testBuff (int a)
 {
@@ -233,16 +264,16 @@ void testBuff (int a)
 	switch (a)
 	{
 		case 7:
-			BM70.addResponse (0x08, randomData1, 7);
+			module.addResponse (0x08, randomData1, 7);
 			break;
 
 		case 8:
-			BM70.addResponse (0x0A, randomData2, 5);
+			module.addResponse (0x08, randomData2, 5);
 			break;
 
 		case 9:
-			BM70.getResponse (0x08, response, size);
-			Serial.print ("\nSize: ");
+			module.getResponse (0x08, response, size);
+			Serial.print ("Size: ");
 			Serial.print (size);
 
 			for (int i = 0; i < size; i++)
@@ -251,19 +282,20 @@ void testBuff (int a)
 				Serial.print (response[i], HEX);
 				Serial.print ("  ");
 			}
+			Serial.println();
 			break;
 
 		case 4:
-			BM70.addResponse (0x0A, randomData3, 7);
+			module.addResponse (0x0A, randomData3, 7);
 			break;
 
 		case 5:
-			BM70.addResponse (0x0A, randomData4, 5);
+			module.addResponse (0x0A, randomData4, 5);
 			break;
 
 		case 6:
-			BM70.getResponse (0x0A, response, size);
-			Serial.print ("\nSize: ");
+			module.getResponse (0x0A, response, size);
+			Serial.print ("Size: ");
 			Serial.print (size);
 
 			for (int i = 0; i < size; i++)
@@ -272,14 +304,15 @@ void testBuff (int a)
 				Serial.print (response[i], HEX);
 				Serial.print ("  ");
 			}
+			Serial.println();
 			break;
 
 		case 1:
-			Serial.print (BM70.responseAvailable (0x08));
+			module.responseAvailable (0x08);
 			break;
 
 		case 2:
-			Serial.print (BM70.responseAvailable (0x0A));
+			module.responseAvailable (0x0A);
 			break;
 	}
 } // testBuff
@@ -288,7 +321,9 @@ void serialEvent ()
 {
 	int byte = Serial.read();
 
-	if (byte >= '1' && byte <= '9')
+	if (byte == '3')
+		testGap();
+	else if (byte >= '1' && byte <= '9')
 		testBuff (byte - '0');
 	else if (byte == '0')
 		testCommon();

@@ -1,64 +1,95 @@
 #include "BM70.h"
 
-int BM70_Class::receiveData (uint16_t timeout)
+BM70::BM70()
+{ }
+
+BM70::BM70(HardwareSerial & initSerial) : BM70 (initSerial, 115200)
+{ }
+
+BM70::BM70(HardwareSerial & initSerial, int baudrate)
+{
+	serial = &initSerial;
+
+	serial->begin (baudrate);
+	responseIndex = 0;
+}
+
+void BM70::action ()
+{
+	receiveData();
+
+	if (millis() - lastBufferAccess > BM70_BUFFER_EMPTY_DELAY && responseIndex != 0)
+	{
+		Serial.println ("[action] Emptying response buffer");
+		responseIndex = 0;
+	}
+}
+
+int BM70::receiveData (uint16_t timeout)
 {
 	time_t timeoutCounter;
 
 	timeoutCounter = millis();
 
-	while (!Serial1.available())
+	while (!serial->available())
 	{
 		if (millis() - timeoutCounter >= timeout)
 			return -1;
 	}
 
+	Serial.println ("[receiveData] ReceiveData called and data available");
+
 	uint8_t data[100]; // TODO : dynamic allocation
 	uint16_t length;
 
-	while (Serial1.available())
+	while (serial->available())
 	{
 		if (read (data, sizeof(data), length) == 0)
 		{
 			if (data[3] == 0x80)
 			{
+				Serial.println ("[receiveData] Data is response");
 				addResponse (data[4], data + 5, length - 6);
 			}
 			else if (data[3] == 0x81)
 			{
+				Serial.println ("[receiveData] Data is status");
 				status           = data[4];
 				lastStatusUpdate = millis();
+			}
+			else
+			{
+				Serial.println ("[receiveData] Data is other");
 			}
 		}
 	}
 
 	return 0;
-} // BM70_Class::receiveData
+} // BM70::receiveData
 
-BM70_Class::BM70_Class()
-{ }
-
-void BM70_Class::init (int baudrate)
-{
-	Serial1.begin (baudrate);
-	responseIndex = 0;
-}
-
-uint8_t BM70_Class::getStatus ()
+uint8_t BM70::getStatus ()
 {
 	return status;
 }
 
-void BM70_Class::setStatus (uint8_t status)
+void BM70::setStatus (uint8_t status)
 {
 	this->status = status;
 }
 
 // Test taille buff + remontée
 
-void BM70_Class::addResponse (uint8_t opCode, uint8_t * datas, uint16_t size)
+void BM70::addResponse (uint8_t opCode, uint8_t * datas, uint16_t size)
 {
+	lastBufferAccess = millis();
+
+	Serial.print ("[addResponse] Adding data to bufer: 0x");
+	Serial.println (opCode, HEX);
+
 	while (responseIndex >= BM70_BUFF_SIZE)
 	{
+		Serial.println ("[addResponse] Buffer full, cleaning last value");
+
 		responseIndex--;
 
 		for (int i = 0; i < responseIndex; i++)
@@ -80,14 +111,25 @@ void BM70_Class::addResponse (uint8_t opCode, uint8_t * datas, uint16_t size)
 	}
 
 	responseIndex++;
-}
 
-int BM70_Class::getResponse (uint8_t opCode, uint8_t * response, uint16_t &size)
+	Serial.print ("[addResponse] Buffer size: ");
+	Serial.println (responseIndex);
+} // BM70::addResponse
+
+int BM70::getResponse (uint8_t opCode, uint8_t * response, uint16_t &size)
 {
+	lastBufferAccess = millis();
+
+	Serial.print ("[getResponse] Reading buffer for opCode 0x");
+	Serial.println (opCode, HEX);
+
 	for (int i = 0; i < responseIndex; i++)
 	{
 		if (responseBuffer[i][0] == opCode)
 		{
+			Serial.print ("[getResponse] Value found at index ");
+			Serial.println (i);
+
 			size = ((uint16_t) (responseBuffer[i][1] << 8)) + ((uint16_t) responseBuffer[i][2]);
 
 			for (int j = 0; j < size; j++)
@@ -112,15 +154,20 @@ int BM70_Class::getResponse (uint8_t opCode, uint8_t * response, uint16_t &size)
 	size = 0;
 
 	return -1;
-}
+} // BM70::getResponse
 
-int BM70_Class::responseAvailable (uint8_t opCode)
+int BM70::responseAvailable (uint8_t opCode)
 {
 	int n = 0;
 
 	for (int i = 0; i < responseIndex; i++)
 		if (responseBuffer[i][0] == opCode)
 			n++;
+
+	Serial.print ("[responseAvailable] ");
+	Serial.print (n);
+	Serial.print (" response available for 0x");
+	Serial.println (opCode, HEX);
 
 	return n;
 }
@@ -136,14 +183,17 @@ int BM70_Class::responseAvailable (uint8_t opCode)
  * Returns	: Nothing
  *
  **/
-void BM70_Class::send (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength)
+void BM70::send (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength)
 {
 	uint16_t flag    = 2;
 	uint8_t lengthH  = (uint8_t) ((1 + parametersLength) >> 8);
 	uint8_t lengthL  = (uint8_t) (1 + parametersLength);
 	uint8_t checksum = 0 - lengthH - lengthL - opCode;
 
-	HardwareSerial * serial0 = &Serial1;
+	Serial.print ("[send] Sending data with opCode 0x");
+	Serial.println (opCode, HEX);
+
+	HardwareSerial * serial0 = serial;
 
 	for (int i = 0; i < parametersLength; i++)
 		checksum -= parameters[i];
@@ -179,7 +229,7 @@ void BM70_Class::send (uint8_t opCode, uint8_t * parameters, uint16_t parameters
  *           -3 if reception timed out
  *
  **/
-int BM70_Class::read ()
+int BM70::read ()
 {
 	uint8_t data[5];
 	uint16_t length;
@@ -203,20 +253,20 @@ int BM70_Class::read ()
  *           -6 if provided buffer is too small
  *
  **/
-int BM70_Class::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t timeout)
+int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t timeout)
 {
 	uint8_t checksum;
 	time_t timeoutCounter;
 
 	timeoutCounter = millis();
 
-	Serial.print ("[DEBUG] start reading : ");
+	Serial.print ("[read] Start reading : ");
 
 	do
 	{
-		if (Serial1.available())
+		if (serial->available())
 		{
-			data[0] = Serial1.read();
+			data[0] = serial->read();
 			Serial.print (data[0], HEX);
 			Serial.print (" ");
 		}
@@ -230,21 +280,21 @@ int BM70_Class::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uin
 
 	Serial.println();
 
-	data[1] = Serial1.read();
-	data[2] = Serial1.read();
+	data[1] = serial->read();
+	data[2] = serial->read();
 
 	length = (((short) data[1]) << 8 ) + data[2] + 4;
 
 	if (length > bufferSize)
 	{
-		Serial.print ("[DEBUG] data emptying : ");
+		Serial.print ("[read] data emptying : ");
 
 		// Emptying the UART buffer
-		for (int i = 3; Serial1.available() && i < length; i++)
+		for (int i = 3; serial->available() && i < length; i++)
 		{
-			Serial.print (Serial1.read(), HEX);
+			Serial.print (serial->read(), HEX);
 			Serial.print (" ");
-			Serial1.read();
+			serial->read();
 			delay (2);
 		}
 
@@ -252,11 +302,11 @@ int BM70_Class::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uin
 		return -6;
 	}
 
-	Serial.print ("[DEBUG] data reading : ");
+	Serial.print ("[read] data reading : ");
 
-	for (int i = 3; Serial1.available() && i < length; i++)
+	for (int i = 3; serial->available() && i < length; i++)
 	{
-		data[i] = Serial1.read();
+		data[i] = serial->read();
 		Serial.print (data[i], HEX);
 		Serial.print (" ");
 		delay (2);
@@ -277,7 +327,7 @@ int BM70_Class::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uin
 	Serial2.write (data, length);
 
 	return 0;
-} // BM70_Class::read
+} // BM70::read
 
 /**
  * Send data and wait for an answer
@@ -299,32 +349,56 @@ int BM70_Class::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uin
  *           -6 if provided buffer is too small
  *
  **/
-int BM70_Class::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength, uint8_t * response, uint16_t &length, uint16_t timeout)
+int BM70::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength, uint8_t * response, uint16_t &length, uint16_t timeout)
 {
 	uint32_t timeoutCounter;
+
+	Serial.print ("[sendAndRead] Send and read for 0x");
+	Serial.println (opCode, HEX);
 
 	send (opCode, parameters, parametersLength);
 
 	timeoutCounter = millis();
 
-	Serial.print ("Available ressources: ");
-	Serial.println (responseAvailable (opCode));
+	Serial.println ("[sendAndRead] Available ressources before update: ");
+	responseAvailable (opCode);
 
 	while (!responseAvailable (opCode))
 	{
 		receiveData();
 
 		if (millis() - timeoutCounter >= 300)
+		{
+			Serial.println ("[sendAndRead] Error, no response available");
 			return -3;
+		}
 	}
 
-	if (response[1] != 0x00)
-		return response[1];
-
+	Serial.println ("[sendAndRead] Getting response from buffer");
 	getResponse (opCode, response, length);
 
+	Serial.print ("[sendAndRead] Response:");
+
+	for (int i = 0; i < length; i++)
+	{
+		Serial.print (" 0x");
+		if (response[i] < 16)
+			Serial.print (0);
+		Serial.print (response[i], HEX);
+	}
+
+	Serial.println();
+
+	if (response[0] != 0x00)
+	{
+		Serial.println ("[sendAndRead] Error, Bad response code (!= 0x00)");
+		return response[1];
+	}
+
+	Serial.println ("[sendAndRead] Everything went well :)");
+
 	return 0;
-}
+} // BM70::sendAndRead
 
 // ******************************************************************************************** //
 // ************************************** Common commands ************************************* //
@@ -340,12 +414,14 @@ int BM70_Class::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t para
  *           -1 if failed to receive answer
  *
  **/
-int BM70_Class::getInfos (uint32_t &fwVersion, uint64_t &btAddress)
+int BM70::getInfos (uint32_t &fwVersion, uint64_t &btAddress)
 {
 	uint8_t response[13]; // Response parameters should not exceed 10 bytes
 	uint16_t length;
 
 	fwVersion = btAddress = 0;
+
+	receiveData();
 
 	int error = sendAndRead (0x01, NULL, 0, response, length);
 
@@ -362,8 +438,10 @@ int BM70_Class::getInfos (uint32_t &fwVersion, uint64_t &btAddress)
  * Reset module
  *
  **/
-int BM70_Class::reset ()
+int BM70::reset ()
 {
+	receiveData();
+
 	send (0x02, NULL, 0);
 
 	receiveData (500);
@@ -375,8 +453,10 @@ int BM70_Class::reset ()
  * Ask module fot status update
  *
  **/
-int BM70_Class::updateStatus ()
+int BM70::updateStatus ()
 {
+	receiveData();
+
 	send (0x03, NULL, 0);
 
 	receiveData (100);
@@ -396,13 +476,15 @@ int BM70_Class::updateStatus ()
  * TODO : Temperature in °C
  *
  **/
-int BM70_Class::getAdc (uint8_t channel, float &adcValue)
+int BM70::getAdc (uint8_t channel, float &adcValue)
 {
 	uint8_t response[7], stepSize; // Response parameters should not exceed 4 bytes
 	uint16_t length, value;
 	float stepVolt;
 
 	value = stepSize = 0;
+
+	receiveData();
 
 	if (sendAndRead (0x04, &channel, 1, response, length) != 0)
 		return -1;
@@ -437,19 +519,23 @@ int BM70_Class::getAdc (uint8_t channel, float &adcValue)
 	adcValue = stepVolt * value;
 
 	return 0;
-} // BM70_Class::readAdcValue
+} // BM70::readAdcValue
 
 /**
  * Puts the module into shutdown mode
  *
  **/
-int BM70_Class::shutDown ()
+int BM70::shutDown ()
 {
 	uint8_t response[4]; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
+	receiveData();
+
 	if (sendAndRead (0x05, NULL, 0, response, length) != 0)
 		return -1;
+
+	receiveData (100);
 
 	return 0;
 }
@@ -463,10 +549,12 @@ int BM70_Class::shutDown ()
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70_Class::getName (char * name)
+int BM70::getName (char * name)
 {
 	uint8_t response[36]; // Response parameters should not exceed 33 bytes
 	uint16_t length;
+
+	receiveData();
 
 	if (sendAndRead (0x07, NULL, 0, response, length) != 0)
 		return -1;
@@ -492,7 +580,7 @@ int BM70_Class::getName (char * name)
  *           -3 if name too long
  *
  **/
-int BM70_Class::setName (char * name)
+int BM70::setName (char * name)
 {
 	uint8_t response[4], parameters[16]; // Response parameters should not exceed 1 bytes
 	uint16_t length, parametersLength;
@@ -508,6 +596,8 @@ int BM70_Class::setName (char * name)
 
 	for (int i = 0; i < parametersLength; i++)
 		parameters[i + 1] = name[i];
+
+	receiveData();
 
 	if (sendAndRead (0x08, parameters, parametersLength + 1, response, length) != 0)
 		return -1;
@@ -528,10 +618,12 @@ int BM70_Class::setName (char * name)
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70_Class::getPairingMode (uint8_t &setting)
+int BM70::getPairingMode (uint8_t &setting)
 {
 	uint8_t response[5]; // Response parameters should not exceed 2 bytes
 	uint16_t length;
+
+	receiveData();
 
 	if (sendAndRead (0x0A, NULL, 0, response, length) != 0)
 		return -1;
@@ -555,7 +647,7 @@ int BM70_Class::getPairingMode (uint8_t &setting)
  *           -2 if setting is incorrect
  *
  **/
-int BM70_Class::setPairingMode (uint8_t setting)
+int BM70::setPairingMode (uint8_t setting)
 {
 	uint8_t response[4], parameters[2]; // Response parameters should not exceed 1 byte
 	uint16_t length;
@@ -565,6 +657,8 @@ int BM70_Class::setPairingMode (uint8_t setting)
 
 	parameters[0] = 0x00;
 	parameters[1] = setting;
+
+	receiveData();
 
 	if (sendAndRead (0x0B, parameters, 2, response, length) != 0)
 		return -1;
@@ -589,10 +683,12 @@ int BM70_Class::setPairingMode (uint8_t setting)
  *           -4 if bad number of paired devices
  *
  **/
-int BM70_Class::getPaired (uint64_t * devices, uint8_t * priorities, uint8_t &size)
+int BM70::getPaired (uint64_t * devices, uint8_t * priorities, uint8_t &size)
 {
 	uint8_t response[69]; // Response parameters should not exceed 66 bytes
 	uint16_t length;
+
+	receiveData();
 
 	if (sendAndRead (0x0C, NULL, 0, response, length) != 0)
 		return -1;
@@ -621,7 +717,7 @@ int BM70_Class::getPaired (uint64_t * devices, uint8_t * priorities, uint8_t &si
 	}
 
 	return 0;
-}
+} // BM70::getPaired
 
 /**
  * Erase given paired device from the module memory
@@ -632,10 +728,12 @@ int BM70_Class::getPaired (uint64_t * devices, uint8_t * priorities, uint8_t &si
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70_Class::removePaired (uint8_t index)
+int BM70::removePaired (uint8_t index)
 {
 	uint8_t response[4]; // Response parameters should not exceed 1 byte
 	uint16_t length;
+
+	receiveData();
 
 	if (sendAndRead (index == 0xFF ? 0x09 : 0x0D, index == 0xFF ? NULL : &index, index == 0xFF ? 0 : 1, response, length) != 0)
 		return -1;
@@ -658,13 +756,15 @@ int BM70_Class::removePaired (uint8_t index)
  *           -2 if not in the right status after the command
  *
  **/
-int BM70_Class::enableScan (boolean showDuplicate)
+int BM70::enableScan (boolean showDuplicate)
 {
 	uint8_t response[4], arguments[2]; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	arguments[0] = 0x01;
 	arguments[1] = (uint8_t) !showDuplicate;
+
+	receiveData();
 
 	if (sendAndRead (0x16, arguments, 2, response, length) != 0)
 		return -1;
@@ -680,13 +780,15 @@ int BM70_Class::enableScan (boolean showDuplicate)
  *           -2 if not in the right status after the command
  *
  **/
-int BM70_Class::disableScan ()
+int BM70::disableScan ()
 {
 	uint8_t response[4], arguments[2]; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	arguments[0] = 0x00;
 	arguments[1] = 0x00;
+
+	receiveData();
 
 	if (sendAndRead (0x16, arguments, 2, response, length) != 0)
 		return -1;
@@ -698,7 +800,7 @@ int BM70_Class::disableScan ()
  * Connect to the specified device
  *
  **/
-int BM70_Class::connect (boolean randomAddress, uint64_t address)
+int BM70::connect (boolean randomAddress, uint64_t address)
 {
 	uint8_t arguments[8];
 
@@ -707,6 +809,8 @@ int BM70_Class::connect (boolean randomAddress, uint64_t address)
 
 	for (int i = 0; i < 6; i++)
 		arguments[2 + i] = (uint8_t) (address >> (8 * i));
+
+	receiveData();
 
 	send (0x17, arguments, 8);
 
@@ -721,10 +825,12 @@ int BM70_Class::connect (boolean randomAddress, uint64_t address)
  * Returns	: 0 if succeeded
  *           -1 if failed to receive answer or bad answer
  **/
-int BM70_Class::cancelConnect ()
+int BM70::cancelConnect ()
 {
 	uint8_t response[4]; // Response parameters should not exceed 1 byte
 	uint16_t length;
+
+	receiveData();
 
 	if (sendAndRead (0x18, NULL, 0, response, length) != 0)
 		return -1;
@@ -739,12 +845,14 @@ int BM70_Class::cancelConnect ()
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70_Class::disconnect ()
+int BM70::disconnect ()
 {
 	uint8_t response[4], argument; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	argument = 0x00;
+
+	receiveData();
 
 	if (sendAndRead (0x1B, &argument, 1, response, length) != 0)
 		return -1;
@@ -759,12 +867,14 @@ int BM70_Class::disconnect ()
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70_Class::enableAdvert ()
+int BM70::enableAdvert ()
 {
 	uint8_t response[4], argument; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	argument = 0x01;
+
+	receiveData();
 
 	if (sendAndRead (0x1C, &argument, 1, response, length) != 0)
 		return -1;
@@ -779,17 +889,17 @@ int BM70_Class::enableAdvert ()
  *           -1 if failed to receive answer or bad answer
  *
  **/
-int BM70_Class::disableAdvert ()
+int BM70::disableAdvert ()
 {
 	uint8_t response[4], argument; // Response parameters should not exceed 1 byte
 	uint16_t length;
 
 	argument = 0x00;
 
+	receiveData();
+
 	if (sendAndRead (0x1C, &argument, 1, response, length) != 0)
 		return -1;
 
 	return 0;
 }
-
-BM70_Class BM70 = BM70_Class();
