@@ -12,8 +12,8 @@ class BM70
 {
 public:
 	BM70();
-	BM70(HardwareSerial & initSerial);
-	BM70(HardwareSerial & initSerial, int baudrate);
+	BM70(HardwareSerial * initSerial);
+	BM70(HardwareSerial * initSerial, uint32_t baudrate);
 
 	void action ();
 
@@ -57,10 +57,10 @@ private:
 	HardwareSerial * serial;
 
 	uint8_t status;
-	time_t lastStatusUpdate;
+	uint32_t lastStatusUpdate;
 	uint8_t responseBuffer[BM70_BUFF_SIZE][BM70_RESPONSE_MAX_SIZE];
 	uint8_t responseIndex;
-	time_t lastBufferAccess;
+	uint32_t lastBufferAccess;
 };
 
 #endif // ifndef BM70_H

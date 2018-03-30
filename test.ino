@@ -6,29 +6,13 @@ BM70 module;
 void setup ()
 {
 	Serial.begin (250000);
-	Serial1.begin (115200);
-	Serial2.begin (115200);
 
-	module = BM70(Serial1);
+	module = BM70 (&Serial1);
 }
 
 void loop ()
 {
 	module.action();
-
-	/*
-	 * if (Serial1.available())
-	 * {
-	 *  char data = Serial1.read();
-	 *  Serial2.write (data);
-	 * }
-	 */
-
-	if (Serial2.available())
-	{
-		char data = Serial2.read();
-		Serial1.write (data);
-	}
 } // loop
 
 void testCommon ()
@@ -233,7 +217,7 @@ void testGap ()
 
 	delay (4);
 
-	Serial.println ("disconnect test"); 
+	Serial.println ("disconnect test");
 	error = module.disconnect();
 	Serial.print ("Error : ");
 	Serial.println (error);
@@ -276,7 +260,7 @@ void testBuff (int a)
 			Serial.print ("Size: ");
 			Serial.print (size);
 
-			for (int i = 0; i < size; i++)
+			for (uint16_t i = 0; i < size; i++)
 			{
 				Serial.print ("  0x");
 				Serial.print (response[i], HEX);
@@ -298,7 +282,7 @@ void testBuff (int a)
 			Serial.print ("Size: ");
 			Serial.print (size);
 
-			for (int i = 0; i < size; i++)
+			for (uint16_t i = 0; i < size; i++)
 			{
 				Serial.print ("  0x");
 				Serial.print (response[i], HEX);
@@ -319,7 +303,7 @@ void testBuff (int a)
 
 void serialEvent ()
 {
-	int byte = Serial.read();
+	uint8_t byte = Serial.read();
 
 	if (byte == '3')
 		testGap();

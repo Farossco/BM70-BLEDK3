@@ -3,12 +3,12 @@
 BM70::BM70()
 { }
 
-BM70::BM70(HardwareSerial & initSerial) : BM70 (initSerial, 115200)
+BM70::BM70(HardwareSerial * initSerial) : BM70 (initSerial, 115200)
 { }
 
-BM70::BM70(HardwareSerial & initSerial, int baudrate)
+BM70::BM70(HardwareSerial * initSerial, uint32_t baudrate)
 {
-	serial = &initSerial;
+	serial = initSerial;
 
 	serial->begin (baudrate);
 	responseIndex = 0;
@@ -27,7 +27,7 @@ void BM70::action ()
 
 int BM70::receiveData (uint16_t timeout)
 {
-	time_t timeoutCounter;
+	uint32_t timeoutCounter;
 
 	timeoutCounter = millis();
 
@@ -92,11 +92,11 @@ void BM70::addResponse (uint8_t opCode, uint8_t * datas, uint16_t size)
 
 		responseIndex--;
 
-		for (int i = 0; i < responseIndex; i++)
+		for (uint16_t i = 0; i < responseIndex; i++)
 		{
 			uint16_t lineSize = ((uint16_t) (responseBuffer[i + 1][1] << 8)) + ((uint16_t) responseBuffer[i + 1][2]) + 3;
 
-			for (int l = 0; l < lineSize; l++)
+			for (uint16_t l = 0; l < lineSize; l++)
 				responseBuffer[i][l] = responseBuffer[i + 1][l];
 		}
 	}
@@ -105,7 +105,7 @@ void BM70::addResponse (uint8_t opCode, uint8_t * datas, uint16_t size)
 	responseBuffer[responseIndex][1] = (uint8_t) (size >> 8);
 	responseBuffer[responseIndex][2] = (uint8_t) size;
 
-	for (int i = 0; i < size; i++)
+	for (uint16_t i = 0; i < size; i++)
 	{
 		responseBuffer[responseIndex][i + 3] = datas[i];
 	}
@@ -132,16 +132,16 @@ int BM70::getResponse (uint8_t opCode, uint8_t * response, uint16_t &size)
 
 			size = ((uint16_t) (responseBuffer[i][1] << 8)) + ((uint16_t) responseBuffer[i][2]);
 
-			for (int j = 0; j < size; j++)
+			for (uint16_t j = 0; j < size; j++)
 				response[j] = responseBuffer[i][j + 3];
 
 			responseIndex--;
 
-			for (int k = i; k < responseIndex; k++)
+			for (uint16_t k = i; k < responseIndex; k++)
 			{
 				uint16_t lineSize = ((uint16_t) (responseBuffer[k + 1][1] << 8)) + ((uint16_t) responseBuffer[k + 1][2]) + 3;
 
-				for (int l = 0; l < lineSize; l++)
+				for (uint16_t l = 0; l < lineSize; l++)
 					responseBuffer[k][l] = responseBuffer[k + 1][l];
 			}
 
@@ -185,7 +185,6 @@ int BM70::responseAvailable (uint8_t opCode)
  **/
 void BM70::send (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength)
 {
-	uint16_t flag    = 2;
 	uint8_t lengthH  = (uint8_t) ((1 + parametersLength) >> 8);
 	uint8_t lengthL  = (uint8_t) (1 + parametersLength);
 	uint8_t checksum = 0 - lengthH - lengthL - opCode;
@@ -193,28 +192,16 @@ void BM70::send (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength
 	Serial.print ("[send] Sending data with opCode 0x");
 	Serial.println (opCode, HEX);
 
-	HardwareSerial * serial0 = serial;
-
-	for (int i = 0; i < parametersLength; i++)
+	for (uint16_t i = 0; i < parametersLength; i++)
 		checksum -= parameters[i];
 
-	while (flag)
-	{
-		if (flag == 1)
-		{
-			serial0->write (0xFA);
-		}
-		serial0->write (0xAA);
-		serial0->write (lengthH);
-		serial0->write (lengthL);
-		serial0->write (opCode);
-		for (int i = 0; i < parametersLength; i++)
-			serial0->write (parameters[i]);
-		serial0->write (checksum);
-
-		flag--;
-		serial0 = &Serial2;
-	}
+	serial->write (0xAA);
+	serial->write (lengthH);
+	serial->write (lengthL);
+	serial->write (opCode);
+	for (uint16_t i = 0; i < parametersLength; i++)
+		serial->write (parameters[i]);
+	serial->write (checksum);
 }
 
 /**
@@ -256,7 +243,7 @@ int BM70::read ()
 int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t timeout)
 {
 	uint8_t checksum;
-	time_t timeoutCounter;
+	uint32_t timeoutCounter;
 
 	timeoutCounter = millis();
 
@@ -290,7 +277,7 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 		Serial.print ("[read] data emptying : ");
 
 		// Emptying the UART buffer
-		for (int i = 3; serial->available() && i < length; i++)
+		for (uint16_t i = 3; serial->available() && i < length; i++)
 		{
 			Serial.print (serial->read(), HEX);
 			Serial.print (" ");
@@ -304,7 +291,7 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 
 	Serial.print ("[read] data reading : ");
 
-	for (int i = 3; serial->available() && i < length; i++)
+	for (uint16_t i = 3; serial->available() && i < length; i++)
 	{
 		data[i] = serial->read();
 		Serial.print (data[i], HEX);
@@ -316,15 +303,12 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 
 	checksum = 0;
 
-	for (int i = 2; i <= length - 1; i++)
+	for (uint16_t i = 2; i <= length - 1; i++)
 		checksum += data[i];
 
 	// Incorrect checksum
 	if (checksum != 0)
 		return -2;
-
-	Serial2.write (0xFB);
-	Serial2.write (data, length);
 
 	return 0;
 } // BM70::read
@@ -379,7 +363,7 @@ int BM70::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parameters
 
 	Serial.print ("[sendAndRead] Response:");
 
-	for (int i = 0; i < length; i++)
+	for (uint16_t i = 0; i < length; i++)
 	{
 		Serial.print (" 0x");
 		if (response[i] < 16)
@@ -559,7 +543,7 @@ int BM70::getName (char * name)
 	if (sendAndRead (0x07, NULL, 0, response, length) != 0)
 		return -1;
 
-	for (int i = 1; i < length - 1; i++)
+	for (uint16_t i = 1; i < length - 1; i++)
 	{
 		name[i - 1] = response[i];
 	}
@@ -594,7 +578,7 @@ int BM70::setName (char * name)
 
 	parameters[0] = 0x00;
 
-	for (int i = 0; i < parametersLength; i++)
+	for (uint16_t i = 0; i < parametersLength; i++)
 		parameters[i + 1] = name[i];
 
 	receiveData();
