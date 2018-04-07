@@ -11,18 +11,25 @@ BM70::BM70(HardwareSerial * initSerial, uint32_t baudrate)
 	serial = initSerial;
 
 	serial->begin (baudrate);
-	responseIndex = 0;
+	responseIndex    = 0;
+	transparentIndex = 0;
+	status           = BM70_STATUS_UNKNOWN;
+	autoConnect      = false;
+	connectionHandle = 0x00;
+	paired           = false;
 }
 
 void BM70::action ()
 {
 	receiveData();
 
-	if (millis() - lastBufferAccess > BM70_BUFFER_EMPTY_DELAY && responseIndex != 0)
+	if (millis() - lastResponseBufferAccess > BM70_BUFFER_EMPTY_DELAY && responseIndex != 0)
 	{
-		Serial.println ("[action] Emptying response buffer");
+		// serial.println ("[action] Emptying response buffer");
 		responseIndex = 0;
 	}
+	if (status != BM70_STATUS_CONNECTED && status != BM70_STATUS_TRANSCOM)
+		paired = false;
 }
 
 int BM70::receiveData (uint16_t timeout)
@@ -37,7 +44,7 @@ int BM70::receiveData (uint16_t timeout)
 			return -1;
 	}
 
-	Serial.println ("[receiveData] ReceiveData called and data available");
+	// serial.println ("[receiveData] ReceiveData called and data available");
 
 	uint8_t data[100]; // TODO : dynamic allocation
 	uint16_t length;
@@ -46,20 +53,105 @@ int BM70::receiveData (uint16_t timeout)
 	{
 		if (read (data, sizeof(data), length) == 0)
 		{
-			if (data[3] == 0x80)
+			if (data[3] == BM70_TYPE_RESPONSE)
 			{
-				Serial.println ("[receiveData] Data is response");
+				// serial.println ("[receiveData] Data is response");
 				addResponse (data[4], data + 5, length - 6);
 			}
-			else if (data[3] == 0x81)
+			else if (data[3] == BM70_TYPE_STATUS)
 			{
-				Serial.println ("[receiveData] Data is status");
+				// serial.println ("[receiveData] Data is status");
 				status           = data[4];
 				lastStatusUpdate = millis();
 			}
+			else if (data[3] == BM70_TYPE_ADVERT_REPORT)
+			{
+				// serial.println ("[receiveData] Data is advertising report");
+				processAdvReport (data[4], data[5], data + 6, data[12], data + 13, data[length - 2]);
+			}
+			else if (data[3] == BM70_TYPE_CONNECTION_COMPLETE)
+			{
+				// serial.println ("[receiveData] Data is connection complete");
+				// if (data[4] == 0)
+				// serial.println ("Connection successful");
+				// else
+				// {
+				// serial.println ("Connection failed");
+				// return 0;
+				// }
+				connectionHandle = data[5];
+				// serial.print ("[receiveData] Connection handle is 0x");
+				// serial.println (connectionHandle, HEX);
+
+				uint64_t address = 0;
+				for (uint8_t i = 0; i < 6; i++)
+					address += (((uint64_t) data[i + 8]) << (8 * i));
+
+				// serial.print ("[action] Connecting address is 0x");
+				// serial.print ((uint32_t) (address >> 32), HEX);
+				// serial.println ((uint32_t) (address), HEX);
+
+				// serial.print ("[action] Wanted address is 0x");
+				// serial.print ((uint32_t) (connectAddress >> 32), HEX);
+				// serial.println ((uint32_t) (connectAddress), HEX);
+
+				if (address == connectAddress)
+				{
+					// serial.println ("Addresses match");
+					paired = false;
+				}
+				else
+				{
+					// serial.println ("Addresses don't match! Disconnecting");
+					disconnect();
+					paired = false;
+				}
+			}
+			else if (data[3] == BM70_TYPE_PAIR_COMPLETE)
+			{
+				// serial.println ("[receiveData] Data is pair complete");
+				if (data[4] != connectionHandle)
+				{
+					// serial.print ("[receiveData] Bad connection handle (0x");
+					// serial.print (data[4], HEX);
+					// serial.println (")");
+				}
+				else
+				{
+					// serial.print ("[receiveData] Connection handle is 0x");
+					// serial.println (connectionHandle, HEX);
+					if (data[5] == 0x00)
+					{
+						// serial.println ("Paired!");
+						paired = true;
+					}
+					else
+					{
+						// serial.println ("Error, not paired!");
+						paired = false;
+					}
+				}
+			}
+			else if (data[3] == BM70_TYPE_PASSKEY_REQUEST)
+			{
+				// serial.println ("[receiveData] Data is passkey request");
+				sendPassKey (passKey);
+				lastStatusUpdate = millis();
+			}
+			else if (data[3] == BM70_TYPE_TRANSPARENT_IN)
+			{
+				// serial.print ("[receiveData] Data is transparent data\n[receiveData] Datas: ");
+				for (uint8_t i = 5; i < length - 1; i++)
+				{
+					// serial.print ((char) data[i]);
+				}
+				// serial.println();
+
+				addTransparent (data + 5, length - 6);
+			}
 			else
 			{
-				Serial.println ("[receiveData] Data is other");
+				// serial.println ("[receiveData] Data is other");
 			}
 		}
 	}
@@ -69,6 +161,7 @@ int BM70::receiveData (uint16_t timeout)
 
 uint8_t BM70::getStatus ()
 {
+	action();
 	return status;
 }
 
@@ -81,14 +174,14 @@ void BM70::setStatus (uint8_t status)
 
 void BM70::addResponse (uint8_t opCode, uint8_t * datas, uint16_t size)
 {
-	lastBufferAccess = millis();
+	lastResponseBufferAccess = millis();
 
-	Serial.print ("[addResponse] Adding data to bufer: 0x");
-	Serial.println (opCode, HEX);
+	// serial.print ("[addResponse] Adding data to bufer: 0x");
+	// serial.println (opCode, HEX);
 
-	while (responseIndex >= BM70_BUFF_SIZE)
+	while (responseIndex >= BM70_RESPONSE_BUFF_SIZE)
 	{
-		Serial.println ("[addResponse] Buffer full, cleaning last value");
+		// serial.println ("[addResponse] Buffer full, cleaning last value");
 
 		responseIndex--;
 
@@ -112,23 +205,23 @@ void BM70::addResponse (uint8_t opCode, uint8_t * datas, uint16_t size)
 
 	responseIndex++;
 
-	Serial.print ("[addResponse] Buffer size: ");
-	Serial.println (responseIndex);
+	// serial.print ("[addResponse] Buffer size: ");
+	// serial.println (responseIndex);
 } // BM70::addResponse
 
 int BM70::getResponse (uint8_t opCode, uint8_t * response, uint16_t &size)
 {
-	lastBufferAccess = millis();
+	lastResponseBufferAccess = millis();
 
-	Serial.print ("[getResponse] Reading buffer for opCode 0x");
-	Serial.println (opCode, HEX);
+	// serial.print ("[getResponse] Reading buffer for opCode 0x");
+	// serial.println (opCode, HEX);
 
 	for (int i = 0; i < responseIndex; i++)
 	{
 		if (responseBuffer[i][0] == opCode)
 		{
-			Serial.print ("[getResponse] Value found at index ");
-			Serial.println (i);
+			// serial.print ("[getResponse] Value found at index ");
+			// serial.println (i);
 
 			size = ((uint16_t) (responseBuffer[i][1] << 8)) + ((uint16_t) responseBuffer[i][2]);
 
@@ -164,12 +257,220 @@ int BM70::responseAvailable (uint8_t opCode)
 		if (responseBuffer[i][0] == opCode)
 			n++;
 
-	Serial.print ("[responseAvailable] ");
-	Serial.print (n);
-	Serial.print (" response available for 0x");
-	Serial.println (opCode, HEX);
+	// serial.print ("[responseAvailable] ");
+	// serial.print (n);
+	// serial.print (" response available for 0x");
+	// serial.println (opCode, HEX);
 
 	return n;
+}
+
+uint8_t BM70::processAdvReport (uint8_t p1, uint8_t addressType, uint8_t * address, uint8_t dataLength, uint8_t * data, int8_t rssi)
+{
+	if (autoConnect == false)
+		return -1;
+
+	if (p1 != 0x00 && p1 != 0x01 && p1 != 0x02)
+		return -2;
+
+	uint64_t connectAddress = 0;
+
+	for (uint8_t i = 0; i < 6; i++)
+		connectAddress += (((uint64_t) address[i]) << (8 * i));
+
+	// serial.print ("[addAdvReport] Received adv address 0x");
+	// serial.print ((uint32_t) (connectAddress >> 32), HEX);
+	// serial.print ((uint32_t) (connectAddress), HEX);
+
+	if (this->connectAddress != connectAddress)
+		return -3;
+
+	// serial.println ("[addAdvReport] Addresses match: connecting...");
+
+	connect (addressType == 0x01, connectAddress);
+
+	return 0;
+}
+
+void BM70::configureAutoConnect (bool host, uint64_t address, char * passKey)
+{
+	removePaired (0xFF);
+
+	connectAddress = address;
+	autoConnect    = true;
+	isHost         = host;
+
+	// serial.print ("[configureAutoConnect] Configuring auto connect as ");
+	// if (host)
+	// serial.print ("host");
+	// else
+	// serial.print ("slave");
+
+	// serial.print (" with address 0x");
+	// serial.print ((uint32_t) (address >> 32), HEX);
+	// serial.print ((uint32_t) (address), HEX);
+
+	// serial.print (" and passKey = ");
+	// serial.println (passKey);
+
+	for (uint8_t i = 0; i <= strlen (passKey); i++)
+	{
+		this->passKey[i] = passKey[i];
+	}
+
+	// serial.println();
+
+	if (host)
+		enableScan();
+	else
+		enableAdvert();
+}
+
+void BM70::sendPassKey (char * pass)
+{
+	if (!autoConnect)
+		return;
+
+	for (uint8_t i = 0; i < 6; i++)
+	{
+		// serial.print ("Sending digit ");
+		// serial.println (pass[i]);
+
+		passKeySendDigit (pass[i]);
+		delay (50);
+	}
+
+	passKeyComplete();
+}
+
+void BM70::addTransparent (uint8_t * datas, uint16_t size)
+{
+	if (size >= BM70_TRANSPARENT_MAX_SIZE)
+	{
+		// serial.println ("[addTransparent] Datas are too long, ignoring");
+		return;
+	}
+
+	// serial.print ("[addTransparent] Adding transparent data to buffer: ");
+	for (uint8_t i = 0; i < size; i++)
+	{
+		// serial.print ((char) datas[i]);
+	}
+	// serial.println();
+
+	while (transparentIndex >= BM70_TRANSPARENT_BUFF_SIZE)
+	{
+		// serial.println ("[addTransparent] Buffer full, cleaning last value");
+
+		transparentIndex--;
+
+		for (uint16_t i = 0; i < transparentIndex; i++)
+		{
+			int16_t lineSize = strlen ((char *) transparentBuffer[i + 1]);
+			if (lineSize == -1 || lineSize >= BM70_TRANSPARENT_MAX_SIZE)
+			{
+				// serial.println ("[addTransparent] Failed to find \\0: copying all the line");
+				lineSize = BM70_TRANSPARENT_MAX_SIZE;
+			}
+
+			for (int16_t l = 0; l < lineSize; l++)
+				transparentBuffer[i][l] = transparentBuffer[i + 1][l];
+		}
+	}
+
+	for (uint16_t i = 0; i < size; i++)
+	{
+		transparentBuffer[transparentIndex][i] = datas[i];
+	}
+
+	transparentBuffer[transparentIndex][size] = '\0';
+
+	transparentIndex++;
+
+	// serial.print ("[addTransparent] Buffer size: ");
+	// serial.println (transparentIndex);
+} // BM70::addTransparent
+
+int BM70::transparentRead (char * data)
+{
+	if (status != BM70_STATUS_TRANSCOM)
+		return -3;
+
+	if (transparentIndex <= 0)
+	{
+		// serial.println ("[readTransparent] Transparent buffer empty");
+		transparentIndex = 0;
+		data[0]          = '\0';
+		return -1;
+	}
+
+	// serial.println ("[readTransparent] Reading transparent buffer");
+
+	int16_t size = (strlen ((char *) transparentBuffer[0]));
+
+	transparentIndex--;
+
+	if (size > 0)
+	{
+		for (int16_t i = 0; i < size; i++)
+			data[i] = transparentBuffer[0][i];
+		data[size] = '\0';
+	}
+	else
+	{
+		data[0] = '\0';
+	}
+
+	for (uint16_t i = 0; i < transparentIndex; i++)
+	{
+		int16_t lineSize = strlen ((char *) transparentBuffer[i + 1]);
+		if (lineSize == -1)
+		{
+			// serial.println ("[addTransparent] Failed to find \\0: copying all the line");
+			lineSize = BM70_TRANSPARENT_MAX_SIZE;
+		}
+
+		for (int16_t l = 0; l < lineSize; l++)
+			transparentBuffer[i][l] = transparentBuffer[i + 1][l];
+	}
+
+	return 0;
+} // BM70::transparentRead
+
+int BM70::transparentWrite (char * data)
+{
+	if (status != BM70_STATUS_TRANSCOM)
+		return -3;
+
+	uint8_t response[4], arguments[51]; // Response parameters should not exceed 1 byte
+	uint16_t length;
+	int16_t dataLength;
+
+	dataLength = strlen (data);
+	if (dataLength < 0 || dataLength >= 50)
+		return -2;
+
+	arguments[0] = connectionHandle;
+
+	for (uint8_t i = 0; i < dataLength; i++)
+	{
+		arguments[i + 1] = data[i];
+	}
+
+	receiveData();
+
+	if (sendAndRead (0x3F, arguments, dataLength + 1, response, length) != 0)
+		return -1;
+
+	return 0;
+}
+
+bool BM70::transparentAvailable ()
+{
+	if (status != BM70_STATUS_TRANSCOM)
+		return false;
+
+	return transparentIndex > 0;
 }
 
 /**
@@ -189,8 +490,8 @@ void BM70::send (uint8_t opCode, uint8_t * parameters, uint16_t parametersLength
 	uint8_t lengthL  = (uint8_t) (1 + parametersLength);
 	uint8_t checksum = 0 - lengthH - lengthL - opCode;
 
-	Serial.print ("[send] Sending data with opCode 0x");
-	Serial.println (opCode, HEX);
+	// Serial.print ("[send] Sending data with opCode 0x");
+	// Serial.println (opCode, HEX);
 
 	for (uint16_t i = 0; i < parametersLength; i++)
 		checksum -= parameters[i];
@@ -247,15 +548,15 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 
 	timeoutCounter = millis();
 
-	Serial.print ("[read] Start reading : ");
+	// Serial.print ("[read] Start reading : ");
 
 	do
 	{
 		if (serial->available())
 		{
 			data[0] = serial->read();
-			Serial.print (data[0], HEX);
-			Serial.print (" ");
+			// Serial.print (data[0], HEX);
+			// Serial.print (" ");
 		}
 
 		if (millis() - timeoutCounter >= timeout)
@@ -265,7 +566,7 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 	}
 	while (data[0] != 0xAA);
 
-	Serial.println();
+	// serial.println();
 
 	data[1] = serial->read();
 	data[2] = serial->read();
@@ -274,32 +575,32 @@ int BM70::read (uint8_t * data, uint16_t bufferSize, uint16_t &length, uint16_t 
 
 	if (length > bufferSize)
 	{
-		Serial.print ("[read] data emptying : ");
+		// serial.print ("[read] data emptying : ");
 
 		// Emptying the UART buffer
 		for (uint16_t i = 3; serial->available() && i < length; i++)
 		{
-			Serial.print (serial->read(), HEX);
-			Serial.print (" ");
+			// serial.print (serial->read(), HEX);
+			// serial.print (" ");
 			serial->read();
 			delay (2);
 		}
 
-		Serial.println();
+		// serial.println();
 		return -6;
 	}
 
-	Serial.print ("[read] data reading : ");
+	// serial.print ("[read] data reading : ");
 
 	for (uint16_t i = 3; serial->available() && i < length; i++)
 	{
 		data[i] = serial->read();
-		Serial.print (data[i], HEX);
-		Serial.print (" ");
+		// serial.print (data[i], HEX);
+		// serial.print (" ");
 		delay (2);
 	}
 
-	Serial.println();
+	// serial.println();
 
 	checksum = 0;
 
@@ -337,14 +638,14 @@ int BM70::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parameters
 {
 	uint32_t timeoutCounter;
 
-	Serial.print ("[sendAndRead] Send and read for 0x");
-	Serial.println (opCode, HEX);
+	// serial.print ("[sendAndRead] Send and read for 0x");
+	// serial.println (opCode, HEX);
 
 	send (opCode, parameters, parametersLength);
 
 	timeoutCounter = millis();
 
-	Serial.println ("[sendAndRead] Available ressources before update: ");
+	// serial.println ("[sendAndRead] Available ressources before update: ");
 	responseAvailable (opCode);
 
 	while (!responseAvailable (opCode))
@@ -353,36 +654,42 @@ int BM70::sendAndRead (uint8_t opCode, uint8_t * parameters, uint16_t parameters
 
 		if (millis() - timeoutCounter >= 300)
 		{
-			Serial.println ("[sendAndRead] Error, no response available");
+			// serial.println ("[sendAndRead] Error, no response available");
 			return -3;
 		}
 	}
 
-	Serial.println ("[sendAndRead] Getting response from buffer");
+	// serial.println ("[sendAndRead] Getting response from buffer");
 	getResponse (opCode, response, length);
 
-	Serial.print ("[sendAndRead] Response:");
+	// serial.print ("[sendAndRead] Response:");
 
-	for (uint16_t i = 0; i < length; i++)
-	{
-		Serial.print (" 0x");
-		if (response[i] < 16)
-			Serial.print (0);
-		Serial.print (response[i], HEX);
-	}
+	// for (uint16_t i = 0; i < length; i++)
+	// {
+	// serial.print (" 0x");
+	// if (response[i] < 16)
+	// serial.print (0);
+	// serial.print (response[i], HEX);
+	// }
 
-	Serial.println();
+	// serial.println();
 
 	if (response[0] != 0x00)
 	{
-		Serial.println ("[sendAndRead] Error, Bad response code (!= 0x00)");
+		// serial.println ("[sendAndRead] Error, Bad response code (!= 0x00)");
 		return response[1];
 	}
 
-	Serial.println ("[sendAndRead] Everything went well :)");
+	// serial.println ("[sendAndRead] Everything went well :)");
 
 	return 0;
 } // BM70::sendAndRead
+
+bool BM70::isPaired ()
+{
+	action();
+	return paired;
+}
 
 // ******************************************************************************************** //
 // ************************************** Common commands ************************************* //
@@ -883,6 +1190,96 @@ int BM70::disableAdvert ()
 	receiveData();
 
 	if (sendAndRead (0x1C, &argument, 1, response, length) != 0)
+		return -1;
+
+	return 0;
+}
+
+/**
+ * Disable Bluetooth advertising (Leaves standby mode)
+ *
+ * Returns	: 0 if succeeded
+ *           -1 if failed to receive answer or bad answer
+ *
+ **/
+int BM70::passKeySendDigit (uint8_t digit)
+{
+	uint8_t arguments[3];
+
+	arguments[0] = connectionHandle;
+	arguments[1] = 0x01;
+	arguments[2] = digit;
+
+	send (0x40, arguments, 3);
+
+	return 0;
+}
+
+int BM70::passKeyEraseDigit ()
+{
+	uint8_t arguments[2];
+
+	arguments[0] = connectionHandle;
+	arguments[1] = 0x02;
+
+	send (0x40, arguments, 3);
+
+	return 0;
+}
+
+int BM70::passKeyClearDigit ()
+{
+	uint8_t arguments[2];
+
+	arguments[0] = connectionHandle;
+	arguments[1] = 0x03;
+
+	send (0x40, arguments, 3);
+
+	return 0;
+}
+
+int BM70::passKeyComplete ()
+{
+	uint8_t arguments[2];
+
+	arguments[0] = connectionHandle;
+	arguments[1] = 0x04;
+
+	send (0x40, arguments, 3);
+
+	return 0;
+}
+
+int BM70::enableTransparent (bool writeCmd)
+{
+	uint8_t response[4], arguments[3]; // Response parameters should not exceed 1 byte
+	uint16_t length;
+
+	arguments[0] = connectionHandle;
+	arguments[1] = 0x01;
+	arguments[2] = 0x00;
+
+	receiveData();
+
+	if (sendAndRead (0x35, arguments, 1, response, length) != 0)
+		return -1;
+
+	return 0;
+}
+
+int BM70::disableTransparent ()
+{
+	uint8_t response[4], arguments[3]; // Response parameters should not exceed 1 byte
+	uint16_t length;
+
+	arguments[0] = connectionHandle;
+	arguments[1] = 0x00;
+	arguments[2] = 0x00;
+
+	receiveData();
+
+	if (sendAndRead (0x1C, arguments, 1, response, length) != 0)
 		return -1;
 
 	return 0;
