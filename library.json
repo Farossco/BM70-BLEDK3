@@ -1,0 +1,12 @@
+{
+	"name": "BM70",
+	"keywords": "BM70",
+	"description": "A library for using the BM70 Bluetooth module",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Farossco/BM70-BLEDK3",
+		"branch": "master"
+	},
+	"frameworks": "arduino",
+	"version": "0.0.1"
+}
